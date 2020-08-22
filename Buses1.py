@@ -1,8 +1,3 @@
-# python core
-# sdk
-# 3rd part
-# own
-
 import requests
 from urllib import parse
 import time
@@ -19,11 +14,11 @@ def get_route_by_name(name:str) -> dict:
         name (str): Номер маршрута (принимаем как строку потому что в API хранится как строка)
 
     Returns:
-        dict: Словарь конкретного маршрута, содержит:
-            - Список с id остановок маршрута (list[int]),
-            - Назазвание маршрута (имеет вид 'Начальная остановка' - 'Конечная остановка') (str),
-            - id маршрута (int),
-            - Номер маршрута (str)
+        dict:
+            {'checkpoints_ids': Список с id остановок маршрута (list[int]),
+            'description': Название маршрута (имеет вид 'Начальная остановка' - 'Конечная остановка') (str),
+            'id': id маршрута (int),
+            'name': Номер маршрута (str)}
 
     """
     url = parse.urljoin(URL, 'route/')
@@ -59,17 +54,16 @@ def get_checkpoint_by_id(id: int) -> dict:
 
     Returns:
         dict:
-            Словарь остановки содержит:
-            Её кодовый номер (str),
-            Прогнозируемую широту (float),
-            Название (str),
-            Долготу (float),
-            Heading (float),
-            Прогнозируемую долготу (float),
-            Широту (float),
-            Список id маршрутов этой остановки (list[int]),
-            id остановки (int),
-            Описание остановки (str)
+            {'code_number': Её кодовый номер (str),
+            'projected_lat': Прогнозируемую широту (float),
+            'name': Название (str),
+            'lon' : Долготу (float),
+            'heading': Heading (float),
+            'projected_lon': Прогнозируемую долготу (float),
+            'lat': Широту (float),
+            'routes_ids': Список id маршрутов этой остановки (list[int]),
+            'id': id остановки (int),
+            'description': Описание остановки (str)}
     """
     url = parse.urljoin(URL, 'checkpoint/')
     r = requests.get(url).json()
@@ -98,26 +92,36 @@ def get_checkpoint_by_name(name: str) -> list:
     return checkpoints
 
 
+def time_format(tm: time.struct_time) -> time.struct_time:
+    """Форматирование времени для возможности сравнения со временем в формате %H:%M
+
+    Args:
+        tm (time.struct_time):
+
+    Returns:
+        Время с типом time.struct_time для возможного сравнения со временем в формате %H:%M
+    """
+    return time.strptime(time.strftime('%H:%M', tm), '%H:%M')
+
+
 def get_bus_times(route_id: int, checkpoint_id: int) -> list:
-    """Поиск автобусов в ближайшие полчаса
+    """Поиск ближайших трёх автобусов которые должны приехать на данную остановку
 
     Args:
         route_id (int): id маршрута из API
         checkpoint_id (int): id остановки из API
 
     Returns:
-        Список времён в ближайшие полчаса когда на выбранной остановке будет проезжать выбранный маршрут (list)
+        Список времён ближайших трёх автобусов выбранного маршрута на данной остановке (list)
 
     """
     query = f'times/?route_id={route_id}&checkpoint_id={checkpoint_id}'
     url = parse.urljoin(URL, query)
     r = requests.get(url).json()
-    times = []
-    timeleap = time.strptime(time.strftime('%H:%M', time.localtime(time.time()+1800)), '%H:%M')
-    timenow = time.strptime(time.strftime('%H:%M', time.localtime(time.time())), '%H:%M')
-    for tm in r['objects'][0]['times']:
-        if timenow <= time.strptime(tm, '%H:%M') <= timeleap:
-            times.append(tm)
+    r = r['objects'][0]['times']
+    timenow = time_format(time.localtime(time.time()))
+    times = [tm for tm in r if time.strptime(tm, '%H:%M') >= timenow]
+    times = times[:3]
     return times
 
 
@@ -125,8 +129,8 @@ def route(update, context):
     """Выдаём все остановки с похожими названиями, если таких нет - говорим об этом
 
     Args:
-        update:
-        context:
+        update (Update): Объект update который обрабатывается данной функцией
+        context (CallbackContext): Объект контекста ответа API
 
     Returns:
 
@@ -146,8 +150,8 @@ def call(update, context):
     """Выдаём сообщение какие маршруты присутствуют на выбранной остановке
 
     Args:
-        update:
-        context:
+        update (Update): Объект update который обрабатывается данной функцией
+        context (CallbackContext): Объект контекста ответа API
 
     Returns:
 
@@ -167,8 +171,8 @@ def final_times(update, context):
     """Возвращаем сообщение об автобусах в ближайшие полчаса, если таковых нет - говорим об этом
 
     Args:
-        update:
-        context:
+        update (Update): Объект update который обрабатывается данной функцией
+        context (CallbackContext): Объект контекста ответа API
 
     Returns:
 
