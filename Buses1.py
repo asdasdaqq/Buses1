@@ -1,12 +1,41 @@
 import requests
 from urllib import parse
+from json import loads
 import time
 import sqlite3
-
 from telegram import ext
+import redis
+import Levenshtein
 
 URL = 'https://api.tgt72.ru/api/v5/'
 _BUS_COUNT = 3
+_CACHE_LIFETIME = 10800
+_LETTER_DIFFERENCE = 0.8
+
+
+def cache_is_actual(tail: str) -> list:
+    """Выдать данные из кэша по заданному хвосту запроса, запросить из API и выдать если данные просрочены
+    Args:
+        tail (str): Хвост адреса для запроса в API
+
+    Returns:
+        list: список данных из кэша/API
+    """
+
+    r = redis.Redis()
+    answ = r.get(tail)
+    if answ:
+        return loads(answ.decode("utf-8"))
+    else:
+        url = parse.urljoin(URL, tail)
+        request = requests.get(url).json()
+        data = str(request['objects'])
+        data = data.replace('"', '')
+        data = data.replace("'", "\"")
+        data = data.replace(r'\xa0', '')
+        r.setex(tail, _CACHE_LIFETIME, data)
+        answ = r.get(tail)
+        return loads(answ.decode("utf-8"))
 
 
 def get_route_by_name(name: str) -> dict:
@@ -23,9 +52,8 @@ def get_route_by_name(name: str) -> dict:
             'name': Номер маршрута (str)}
 
     """
-    url = parse.urljoin(URL, 'route/')
-    r = requests.get(url).json()
-    for bus_num in r['objects']:
+    cache = cache_is_actual('route/')
+    for bus_num in cache:
         if bus_num['name'] == name:
             return bus_num
     return
@@ -40,9 +68,8 @@ def get_route_name_by_id(id: int) -> str:
         Номер маршрута (str)
 
     """
-    url = parse.urljoin(URL, 'route/')
-    r = requests.get(url).json()
-    for bus_id in r['objects']:
+    cache = cache_is_actual('route/')
+    for bus_id in cache:
         if bus_id['id'] == id:
             return bus_id['name']
     return
@@ -67,9 +94,8 @@ def get_checkpoint_by_id(id: int) -> dict:
             'id': id остановки (int),
             'description': Описание остановки (str)}
     """
-    url = parse.urljoin(URL, 'checkpoint/')
-    r = requests.get(url).json()
-    for checkpoint in r['objects']:
+    cache = cache_is_actual('checkpoint/')
+    for checkpoint in cache:
         if checkpoint['id'] == id:
             return checkpoint
     return
@@ -86,10 +112,9 @@ def get_checkpoint_by_name(name: str) -> list:
 
     """
     checkpoints = []
-    url = parse.urljoin(URL, 'checkpoint/')
-    r = requests.get(url).json()
-    for checkpoint in r['objects']:
-        if parse.unquote(checkpoint['name']).lower().find(name.lower()) != -1:
+    cache = cache_is_actual('checkpoint/')
+    for checkpoint in cache:
+        if Levenshtein.jaro(parse.unquote(checkpoint['name']).lower(), name.lower()) >= _LETTER_DIFFERENCE:
             checkpoints.append(checkpoint)
     return checkpoints
 
@@ -154,6 +179,11 @@ def call(update, context):
         update (telegram.Update): Объект update который обрабатывается данной функцией
         context (CallbackContext): Объект контекста ответа API
     """
+    def search(x):
+        if x[0]['text'][-1].isalpha():
+            return int(x[0]['text'][:-1])
+        else:
+            return int(x[0]['text'])
     answer_id = update.callback_query['id']
     chat_id = update.callback_query['message']['chat']['id']
     context.bot.answerCallbackQuery(answer_id)
@@ -161,12 +191,6 @@ def call(update, context):
     chk_id = int(update.callback_query.data)
     for rt_id in get_checkpoint_by_id(chk_id)['routes_ids']:
         rt_list.append([{'text': get_route_name_by_id(rt_id), 'callback_data': f'0,{rt_id},{chk_id}'}])
-
-    def search(x):
-        if x[0]['text'][-1].isalpha():
-            return int(x[0]['text'][:-1])
-        else:
-            return int(x[0]['text'])
     rt_list = sorted(rt_list, key=lambda x: search(x))
     keyboard = {'inline_keyboard': rt_list}
     context.bot.send_message(chat_id=chat_id, text='Маршруты на данной остановке:', reply_markup=keyboard)
